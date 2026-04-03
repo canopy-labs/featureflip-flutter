@@ -3,6 +3,7 @@ description: Flutter SDK for Featureflip — evaluate feature flags in Flutter a
 version: 1.0.0
 homepage: https://featureflip.io
 documentation: https://featureflip.io/docs/sdks/flutter/
+repository: https://github.com/canopy-labs/featureflip-flutter
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
