@@ -1,0 +1,19 @@
+name: featureflip
+description: Flutter SDK for Featureflip — evaluate feature flags in Flutter apps with real-time updates.
+version: 1.0.0
+homepage: https://featureflip.io
+documentation: https://featureflip.io/docs/sdks/flutter/
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ">=5.0.0 <7.0.0"
