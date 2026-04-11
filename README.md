@@ -8,7 +8,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  featureflip: ^1.0.0
+  featureflip: ^2.0.0
 ```
 
 Then run:
@@ -23,7 +23,7 @@ flutter pub get
 import 'package:featureflip/featureflip.dart';
 
 final config = FeatureflipConfig(clientKey: 'your-client-sdk-key');
-final client = FeatureflipClient(config: config);
+final client = FeatureflipClient.get('your-client-sdk-key', config: config);
 
 await client.initialize();
 
@@ -51,13 +51,19 @@ final config = FeatureflipConfig(
 );
 ```
 
-## Singleton Pattern
+## Lifetime
+
+`FeatureflipClient.get()` is the only way to obtain a client. Calling it multiple times with the same SDK key returns handles that share a single underlying connection — safe for any registration lifetime (singleton, scoped, transient).
 
 ```dart
-FeatureflipClient.configure(config);
+final client1 = FeatureflipClient.get('key', config: config);
+final client2 = FeatureflipClient.get('key', config: config);
 
-// Access from anywhere
-final enabled = FeatureflipClient.shared.boolVariation('my-feature', defaultValue: false);
+// client1 and client2 share one connection (refcounted).
+// The connection shuts down only when the last handle is closed.
+
+await client1.close(); // decrements refcount
+await client2.close(); // refcount → 0, connection shut down
 ```
 
 ## Evaluation
@@ -73,7 +79,7 @@ final tier = client.stringVariation('pricing-tier', defaultValue: 'free');
 final limit = client.numberVariation('rate-limit', defaultValue: 100.0);
 
 // JSON flag
-final config = client.jsonVariation('ui-config', defaultValue: {'theme': 'light'});
+final uiConfig = client.jsonVariation('ui-config', defaultValue: {'theme': 'light'});
 ```
 
 ## Identify
@@ -136,15 +142,24 @@ client.stringVariation('pricing-tier', defaultValue: 'free'); // 'pro'
 client.boolVariation('unknown', defaultValue: false);         // false (default)
 ```
 
+For test isolation, call `resetForTesting()` in your test teardown:
+
+```dart
+tearDown(() {
+  FeatureflipClient.resetForTesting();
+});
+```
+
 ## Features
 
 - **Client-side evaluation** — Flags evaluated server-side, only values returned
 - **Real-time updates** — SSE streaming with automatic polling fallback
+- **Singleton by construction** — Same SDK key always shares one connection
+- **Refcounted lifecycle** — Connection shuts down when the last handle closes
 - **Event tracking** — Automatic batching and background flushing
 - **Test support** — `forTesting()` factory for deterministic unit tests
 - **Flutter integration** — `FeatureflipProvider` for reactive flag values
 - **Lifecycle management** — Automatic pause/resume on app lifecycle changes
-- **Singleton or instance** — `configure`/`shared` pattern or manual instantiation
 
 ## Requirements
 
@@ -153,4 +168,4 @@ client.boolVariation('unknown', defaultValue: false);         // false (default)
 
 ## License
 
-MIT
+Apache-2.0
