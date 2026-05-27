@@ -4,10 +4,16 @@ class FlagValue {
   final String variation;
   final String reason;
 
+  /// Key of the prerequisite flag that caused this flag to serve its off
+  /// variation. Populated by the server only when `reason ==
+  /// "prerequisite-failed"`; null for all other reasons.
+  final String? prerequisiteKey;
+
   const FlagValue({
     required this.value,
     required this.variation,
     required this.reason,
+    this.prerequisiteKey,
   });
 
   factory FlagValue.fromJson(Map<String, dynamic> json) {
@@ -15,14 +21,19 @@ class FlagValue {
       value: json['value'],
       variation: json['variation'] as String,
       reason: json['reason'] as String,
+      prerequisiteKey: json['prerequisiteKey'] as String?,
     );
   }
 
-  Map<String, dynamic> toJson() => {
-        'value': value,
-        'variation': variation,
-        'reason': reason,
-      };
+  Map<String, dynamic> toJson() {
+    final json = <String, dynamic>{
+      'value': value,
+      'variation': variation,
+      'reason': reason,
+    };
+    if (prerequisiteKey != null) json['prerequisiteKey'] = prerequisiteKey;
+    return json;
+  }
 
   @override
   bool operator ==(Object other) =>
@@ -31,10 +42,12 @@ class FlagValue {
           runtimeType == other.runtimeType &&
           value == other.value &&
           variation == other.variation &&
-          reason == other.reason;
+          reason == other.reason &&
+          prerequisiteKey == other.prerequisiteKey;
 
   @override
-  int get hashCode => Object.hash(value, variation, reason);
+  int get hashCode =>
+      Object.hash(value, variation, reason, prerequisiteKey);
 }
 
 /// Server response from /v1/client/evaluate and /v1/client/identify.

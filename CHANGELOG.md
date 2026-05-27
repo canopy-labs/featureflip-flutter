@@ -1,3 +1,9 @@
+## Unreleased
+
+### Added
+
+- **`FlagValue.prerequisiteKey`.** Optional `String?` on `FlagValue` carrying the key of the prerequisite flag that caused this flag to serve its off variation. Populated by the server on `/v1/client/evaluate` and `/v1/client/identify` responses when `reason == "prerequisite-failed"`; null for all other reasons. `toJson` omits the field when null, preserving the existing wire shape for older consumers.
+
 ## 2.0.0
 
 **BREAKING:** Singleton-by-construction refactor.
