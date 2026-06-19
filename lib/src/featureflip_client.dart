@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 
+import 'anonymous_key_store.dart';
 import 'featureflip_config.dart';
 import 'featureflip_provider.dart';
 import 'flag_cache.dart';
@@ -29,6 +30,7 @@ class _SharedFeatureflipCore {
   LifecycleObserver? _lifecycleObserver;
 
   Map<String, dynamic> _currentContext;
+  final AnonymousKeyStore _anonymousKeyStore;
   bool _initialized = false;
   final bool _isTestClient;
   int _refCount = 1;
@@ -41,7 +43,9 @@ class _SharedFeatureflipCore {
     required this.cache,
     required Map<String, dynamic> currentContext,
     required bool isTestClient,
+    AnonymousKeyStore? anonymousKeyStore,
   })  : _currentContext = Map.of(currentContext),
+        _anonymousKeyStore = anonymousKeyStore ?? SharedPreferencesAnonymousKeyStore(),
         _isTestClient = isTestClient {
     eventProcessor = EventProcessor(
       httpClient: httpClient,
@@ -56,6 +60,7 @@ class _SharedFeatureflipCore {
         httpClient = FeatureflipHttpClient(baseUrl: 'https://localhost', clientKey: 'test-key'),
         cache = FlagCache(),
         _currentContext = {},
+        _anonymousKeyStore = SharedPreferencesAnonymousKeyStore(),
         _isTestClient = true {
     eventProcessor = EventProcessor(
       httpClient: httpClient,
@@ -108,9 +113,18 @@ class _SharedFeatureflipCore {
   }
 
   Future<void> _doInitialize() async {
+    // Resolve a persisted anonymous user_id into the working context before the
+    // first evaluate, so evaluate, SSE, polling, and track() all carry it.
+    // Guarded: a shared_preferences platform/channel error must degrade to the
+    // raw context, not break initialization.
+    try {
+      _currentContext = await resolveAnonymousContext(_currentContext, _anonymousKeyStore);
+    } catch (_) {
+      // persistence unavailable — proceed with the caller's context
+    }
     try {
       final response = await httpClient.evaluate(
-        config.context,
+        _currentContext,
         timeout: Duration(seconds: config.initTimeoutSeconds),
       );
       cache.setAll(response.flags);
@@ -179,12 +193,29 @@ class _SharedFeatureflipCore {
   // Identify
 
   Future<void> identify(Map<String, dynamic> context) async {
+    // Let any in-flight initialization finish first so its anon-id resolution
+    // and data-source startup don't clobber this identify (and so updateContext
+    // below reaches an already-started data source).
+    final initFuture = _initFuture;
+    if (initFuture != null) {
+      try {
+        await initFuture;
+      } catch (_) {
+        // init failure is already handled inside _doInitialize
+      }
+    }
+    var resolved = context;
+    try {
+      resolved = await resolveAnonymousContext(context, _anonymousKeyStore);
+    } catch (_) {
+      // persistence unavailable — use the caller's context
+    }
     final connectionId = _streamingDataSource?.connectionId;
-    final response = await httpClient.identify(context, connectionId: connectionId);
+    final response = await httpClient.identify(resolved, connectionId: connectionId);
     cache.setAll(response.flags);
-    _currentContext = Map.of(context);
-    _streamingDataSource?.updateContext(context);
-    _pollingDataSource?.updateContext(context);
+    _currentContext = Map.of(resolved);
+    _streamingDataSource?.updateContext(resolved);
+    _pollingDataSource?.updateContext(resolved);
     provider.updateFlags();
   }
 
