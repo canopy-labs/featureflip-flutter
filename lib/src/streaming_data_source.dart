@@ -15,6 +15,8 @@ class StreamingDataSource {
   final String clientKey;
   Map<String, dynamic> _context;
   final void Function(Map<String, FlagValue> flags) onChange;
+  // Full snapshot the server sends first on every (re)connect -> apply as a REPLACE.
+  final void Function(Map<String, FlagValue> flags)? onSnapshot;
   final void Function()? onMaxRetriesReached;
   final http.Client _client;
 
@@ -30,6 +32,7 @@ class StreamingDataSource {
     required this.clientKey,
     required Map<String, dynamic> context,
     required this.onChange,
+    this.onSnapshot,
     this.onMaxRetriesReached,
     http.Client? client,
   })  : _context = Map.of(context),
@@ -95,7 +98,7 @@ class StreamingDataSource {
         return;
       }
 
-      // Reset backoff on successful connection
+      // Reset backoff on successful connection.
       _backoff = initialBackoff;
       _retryCount = 0;
 
@@ -175,7 +178,15 @@ class StreamingDataSource {
     try {
       final json = jsonDecode(data) as Map<String, dynamic>;
       final response = EvaluateResponse.fromJson(json);
-      onChange(response.flags);
+      // The connect-time snapshot is marked `full: true` (#1873) -> REPLACE the store
+      // (drops flags deleted during the outage). Deltas omit it -> MERGE. Keyed off the
+      // explicit marker, not event order, so a delta racing ahead of the snapshot can't
+      // be mistaken for a full replace.
+      if (json['full'] == true) {
+        (onSnapshot ?? onChange)(response.flags);
+      } else {
+        onChange(response.flags);
+      }
     } catch (_) {
       // Ignore parse errors
     }

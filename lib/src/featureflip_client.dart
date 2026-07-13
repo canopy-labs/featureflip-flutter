@@ -250,6 +250,9 @@ class _SharedFeatureflipCore {
         clientKey: config.clientKey,
         context: _currentContext,
         onChange: _handleStreamUpdate,
+        // First flags-updated after (re)connect is the full snapshot -> REPLACE,
+        // so a flag deleted during an outage is dropped on reconnect.
+        onSnapshot: _handleFullUpdate,
         onMaxRetriesReached: _handleStreamingFallback,
       );
       _streamingDataSource!.start();
