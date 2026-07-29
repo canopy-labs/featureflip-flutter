@@ -96,3 +96,40 @@ class SdkEvent {
     return json;
   }
 }
+
+/// Emitted once per variation call. [reason] is the server's kebab-case string
+/// forwarded verbatim — client SDKs have no local evaluator, so the engine is
+/// their evaluator. The one synthesized value is `flag-not-found`, used when the
+/// flag is absent from the snapshot.
+class EvaluationEvent {
+  final String flagKey;
+  final Map<String, dynamic> context;
+  final dynamic value;
+
+  /// The served arm. Null when the flag is absent from the snapshot.
+  final String? variationKey;
+  final String reason;
+
+  /// Parsed from a `rule-match:{id}` reason; null for every other reason.
+  final String? ruleId;
+
+  /// Set by the server only when `reason == "prerequisite-failed"`.
+  final String? prerequisiteKey;
+
+  /// ISO-8601.
+  final String timestamp;
+
+  const EvaluationEvent({
+    required this.flagKey,
+    required this.context,
+    required this.value,
+    required this.reason,
+    required this.timestamp,
+    this.variationKey,
+    this.ruleId,
+    this.prerequisiteKey,
+  });
+}
+
+/// An in-process observer invoked on every variation call. Return value ignored.
+typedef EvaluationInspector = void Function(EvaluationEvent event);

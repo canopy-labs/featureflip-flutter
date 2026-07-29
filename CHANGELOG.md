@@ -1,8 +1,27 @@
-## Unreleased
+## 2.4.0 — 2026-07-29
 
 ### Added
 
-- **`FlagValue.prerequisiteKey`.** Optional `String?` on `FlagValue` carrying the key of the prerequisite flag that caused this flag to serve its off variation. Populated by the server on `/v1/client/evaluate` and `/v1/client/identify` responses when `reason == "prerequisite-failed"`; null for all other reasons. `toJson` omits the field when null, preserving the existing wire shape for older consumers.
+- **`onEvaluation` inspector callback.** `inspectors` config option registering in-process observers fired on every evaluation. Notified from the four variation accessors after type coercion — `flagDetail()` and all-flags accessors stay silent so one decision is never double-counted. `reason` is the engine's kebab-case string forwarded verbatim; a flag absent from the snapshot synthesizes `flag-not-found` (#1914).
+
+## 2.3.0 — 2026-07-13
+
+### Fixed
+
+- Outage-recovery hardening: replace-on-reconnect, so a flag deleted while disconnected is dropped (#1883).
+- The connect-snapshot store replacement is keyed off the explicit `full: true` marker rather than event order, which was ambiguous when a delta arrived first (#1887).
+
+## 2.2.0 — 2026-06-19
+
+### Added
+
+- A generated anonymous `user_id` is persisted via `shared_preferences` and injected at every evaluate/identify/SSE call, so anonymous users bucket consistently across sessions (#1467).
+
+## 2.1.0 — 2026-05-27
+
+### Added
+
+- **`FlagValue.prerequisiteKey`.** Optional `String?` on `FlagValue` carrying the key of the prerequisite flag that caused this flag to serve its off variation. Populated by the server on `/v1/client/evaluate` and `/v1/client/identify` responses when `reason == "prerequisite-failed"`; null for all other reasons. `toJson` omits the field when null, preserving the existing wire shape for older consumers (#1124).
 
 ## 2.0.0
 

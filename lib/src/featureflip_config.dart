@@ -1,3 +1,5 @@
+import 'models.dart';
+
 /// Configuration for the Featureflip client.
 class FeatureflipConfig {
   /// Client SDK key from your project settings.
@@ -24,6 +26,10 @@ class FeatureflipConfig {
   /// Maximum time in seconds to wait for initial flag fetch.
   final int initTimeoutSeconds;
 
+  /// In-process observers fired on every variation call. Honored on the first
+  /// `get()` per client key, like every other option.
+  final List<EvaluationInspector> inspectors;
+
   const FeatureflipConfig({
     required this.clientKey,
     this.baseUrl = 'https://eval.featureflip.io',
@@ -33,5 +39,6 @@ class FeatureflipConfig {
     this.flushIntervalSeconds = 30,
     this.flushBatchSize = 100,
     this.initTimeoutSeconds = 10,
+    this.inspectors = const [],
   });
 }

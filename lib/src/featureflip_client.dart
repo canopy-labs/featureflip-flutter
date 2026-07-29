@@ -14,6 +14,9 @@ import 'streaming_data_source.dart';
 /// Process-wide cache of shared cores, keyed by SDK key.
 final Map<String, _SharedFeatureflipCore> _liveCache = {};
 
+/// The engine embeds the matched rule id in the reason as `rule-match:{id}`.
+const _ruleMatchPrefix = 'rule-match:';
+
 /// Internal shared core owning all expensive resources of a FeatureflipClient.
 ///
 /// Refcounted: multiple [FeatureflipClient] handles can share one core, and the
@@ -55,8 +58,14 @@ class _SharedFeatureflipCore {
     provider = FeatureflipProvider(cache);
   }
 
-  _SharedFeatureflipCore._test(Map<String, dynamic> overrides)
-      : config = const FeatureflipConfig(clientKey: 'test-key', baseUrl: 'https://localhost'),
+  _SharedFeatureflipCore._test(
+    Map<String, dynamic> overrides, {
+    List<EvaluationInspector> inspectors = const [],
+  })  : config = FeatureflipConfig(
+          clientKey: 'test-key',
+          baseUrl: 'https://localhost',
+          inspectors: inspectors,
+        ),
         httpClient = FeatureflipHttpClient(baseUrl: 'https://localhost', clientKey: 'test-key'),
         cache = FlagCache(),
         _currentContext = {},
@@ -164,30 +173,71 @@ class _SharedFeatureflipCore {
 
   bool boolVariation(String key, {required bool defaultValue}) {
     final flag = cache.get(key);
-    if (flag == null || flag.value is! bool) return defaultValue;
-    return flag.value as bool;
+    final value = (flag == null || flag.value is! bool) ? defaultValue : flag.value as bool;
+    _notifyInspectors(key, flag, value);
+    return value;
   }
 
   String stringVariation(String key, {required String defaultValue}) {
     final flag = cache.get(key);
-    if (flag == null || flag.value is! String) return defaultValue;
-    return flag.value as String;
+    final value = (flag == null || flag.value is! String) ? defaultValue : flag.value as String;
+    _notifyInspectors(key, flag, value);
+    return value;
   }
 
   double numberVariation(String key, {required double defaultValue}) {
     final flag = cache.get(key);
-    if (flag == null) return defaultValue;
-    final value = flag.value;
-    if (value is double) return value;
-    if (value is int) return value.toDouble();
-    if (value is num) return value.toDouble();
-    return defaultValue;
+    final raw = flag?.value;
+    final value = raw is num ? raw.toDouble() : defaultValue;
+    _notifyInspectors(key, flag, value);
+    return value;
   }
 
   dynamic jsonVariation(String key, {required dynamic defaultValue}) {
     final flag = cache.get(key);
-    if (flag == null) return defaultValue;
-    return flag.value;
+    final value = flag == null ? defaultValue : flag.value;
+    _notifyInspectors(key, flag, value);
+    return value;
+  }
+
+  /// Fire the registered inspectors. Called once per variation call, after type
+  /// coercion, so [value] is exactly what the accessor returns. A throwing
+  /// inspector is isolated: it neither breaks the returned value nor stops the
+  /// remaining inspectors.
+  void _notifyInspectors(String key, FlagValue? flag, dynamic value) {
+    final inspectors = config.inspectors;
+    if (inspectors.isEmpty || _isShutDown) return;
+
+    // The flag is absent from the snapshot (unknown key, not yet initialized,
+    // or not clientSideVisible). The server never sent a reason for it, so
+    // synthesize one in the same kebab-case the rest of the reasons use.
+    final reason = flag?.reason ?? 'flag-not-found';
+    String? ruleId;
+    if (reason.startsWith(_ruleMatchPrefix)) {
+      final suffix = reason.substring(_ruleMatchPrefix.length);
+      if (suffix.isNotEmpty) ruleId = suffix;
+    }
+
+    final event = EvaluationEvent(
+      flagKey: key,
+      // Copy, so a buggy inspector cannot mutate core state.
+      context: Map.of(_currentContext),
+      value: value,
+      variationKey: flag?.variation,
+      reason: reason,
+      ruleId: ruleId,
+      prerequisiteKey: flag?.prerequisiteKey,
+      timestamp: DateTime.now().toUtc().toIso8601String(),
+    );
+
+    for (final inspector in inspectors) {
+      try {
+        inspector(event);
+      } catch (err) {
+        // ignore: avoid_print
+        print('[featureflip] evaluation inspector threw: $err');
+      }
+    }
   }
 
   // Identify
@@ -396,8 +446,13 @@ class FeatureflipClient {
   ///
   /// Test clients do not participate in the shared cache and each call
   /// returns an independent client.
-  static FeatureflipClient forTesting(Map<String, dynamic> overrides) {
-    return FeatureflipClient._(_SharedFeatureflipCore._test(overrides));
+  static FeatureflipClient forTesting(
+    Map<String, dynamic> overrides, {
+    List<EvaluationInspector> inspectors = const [],
+  }) {
+    return FeatureflipClient._(
+      _SharedFeatureflipCore._test(overrides, inspectors: inspectors),
+    );
   }
 
   /// Clears the shared core cache. For test isolation only.
