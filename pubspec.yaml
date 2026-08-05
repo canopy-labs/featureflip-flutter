@@ -1,6 +1,6 @@
 name: featureflip
 description: Flutter SDK for Featureflip — evaluate feature flags in Flutter apps with real-time updates.
-version: 2.4.0
+version: 2.4.1
 homepage: https://featureflip.io
 documentation: https://featureflip.io/docs/sdks/flutter/
 repository: https://github.com/canopy-labs/featureflip-flutter

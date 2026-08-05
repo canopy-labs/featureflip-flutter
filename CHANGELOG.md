@@ -1,3 +1,10 @@
+## 2.4.1 — 2026-08-05
+
+### Fixed
+
+- `LICENSE` is now the verbatim Apache-2.0 text. Three phrases in the operative sections had been reworded and the appendix dropped, which left automated license scanners unable to identify it. The license itself is unchanged; the file now says what it always claimed to.
+- The README's `pubspec.yaml` snippet says `^2.4.1`. It said `^2.0.0` in the repo and on the mirror, while pub.dev showed a different value again — the publish workflow rewrote that line on its way out, so the three copies disagreed. The rewrite is gone and all three now come from one source.
+
 ## 2.4.0 — 2026-07-29
 
 ### Added
