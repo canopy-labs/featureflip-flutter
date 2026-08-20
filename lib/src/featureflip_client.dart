@@ -128,8 +128,11 @@ class _SharedFeatureflipCore {
     // raw context, not break initialization.
     try {
       _currentContext = await resolveAnonymousContext(_currentContext, _anonymousKeyStore);
-    } catch (_) {
-      // persistence unavailable — proceed with the caller's context
+    } catch (err) {
+      // Persistence unavailable — proceed with the caller's context. Logged
+      // rather than swallowed: it silently changes bucketing for anonymous
+      // users, so it must not be invisible.
+      debugPrint('[featureflip] anonymous id unavailable, using the raw context: $err');
     }
     try {
       final response = await httpClient.evaluate(
@@ -137,8 +140,20 @@ class _SharedFeatureflipCore {
         timeout: Duration(seconds: config.initTimeoutSeconds),
       );
       cache.setAll(response.flags);
-    } catch (_) {
-      // Use empty cache if network fails
+    } catch (err) {
+      // NON-TERMINAL BY DESIGN — do not rethrow, and do not leave _initialized
+      // false. The data source started below retries forever and re-snapshots on
+      // connect, so a cold-start failure is recoverable; meanwhile every flag
+      // serves the caller's default. This matches the browser SDK's documented
+      // contract, and throwing here would take an app down at startup over a
+      // transient blip.
+      //
+      // But it must not be SILENT. A wrong key in a release build, a 401 from a
+      // revoked key, captive-portal wifi and a backend blip otherwise all present
+      // exactly like a healthy start, and every flag quietly serves its default
+      // forever. The log is the only thing that distinguishes them (#2290).
+      debugPrint('[featureflip] initial flag fetch failed, serving defaults until the '
+          'data source recovers: $err');
     }
 
     _startDataSource();
@@ -466,7 +481,11 @@ class FeatureflipClient {
   }
 
   /// Whether the client has completed initialization.
-  bool get isInitialized => _core._initialized;
+  /// Whether the client has loaded flags and is ready to evaluate.
+  ///
+  /// False once this handle is closed: `close()` releases the core, so the handle
+  /// can no longer evaluate anything (#2291).
+  bool get isInitialized => !_disposed && _core._initialized;
 
   /// Flutter widget integration provider.
   FeatureflipProvider get flagProvider => _core.provider;
@@ -485,21 +504,31 @@ class FeatureflipClient {
     await _core._release();
   }
 
-  /// Returns a boolean flag value, or the default if missing or not a bool.
-  bool boolVariation(String key, {required bool defaultValue}) =>
-      _core.boolVariation(key, defaultValue: defaultValue);
+  // A closed handle serves the caller's default (#2291, contract from #2313).
+  // close() releases the core — stopping streaming, flushing events, unregistering
+  // the lifecycle observer — but the in-memory cache stays readable, so without
+  // these guards the handle would keep serving a frozen snapshot that can never
+  // update again.
 
-  /// Returns a string flag value, or the default if missing or not a string.
-  String stringVariation(String key, {required String defaultValue}) =>
-      _core.stringVariation(key, defaultValue: defaultValue);
+  /// Returns a boolean flag value, or the default if missing, not a bool, or closed.
+  bool boolVariation(String key, {required bool defaultValue}) => _disposed
+      ? defaultValue
+      : _core.boolVariation(key, defaultValue: defaultValue);
 
-  /// Returns a numeric flag value, or the default if missing or not a number.
-  double numberVariation(String key, {required double defaultValue}) =>
-      _core.numberVariation(key, defaultValue: defaultValue);
+  /// Returns a string flag value, or the default if missing, not a string, or closed.
+  String stringVariation(String key, {required String defaultValue}) => _disposed
+      ? defaultValue
+      : _core.stringVariation(key, defaultValue: defaultValue);
 
-  /// Returns the raw flag value, or the default if missing.
-  dynamic jsonVariation(String key, {required dynamic defaultValue}) =>
-      _core.jsonVariation(key, defaultValue: defaultValue);
+  /// Returns a numeric flag value, or the default if missing, not a number, or closed.
+  double numberVariation(String key, {required double defaultValue}) => _disposed
+      ? defaultValue
+      : _core.numberVariation(key, defaultValue: defaultValue);
+
+  /// Returns the raw flag value, or the default if missing or closed.
+  dynamic jsonVariation(String key, {required dynamic defaultValue}) => _disposed
+      ? defaultValue
+      : _core.jsonVariation(key, defaultValue: defaultValue);
 
   /// Re-evaluates flags for a new user context.
   Future<void> identify(Map<String, dynamic> context) =>
@@ -512,6 +541,7 @@ class FeatureflipClient {
   /// Force-flushes pending analytics events.
   Future<void> flush() => _core.flush();
 
-  /// Returns all current flag values.
-  Map<String, FlagValue> allFlags() => _core.allFlags();
+  /// Returns all current flag values, or an empty map once closed — the
+  /// bulk-read analogue of a variation falling back to its default.
+  Map<String, FlagValue> allFlags() => _disposed ? const {} : _core.allFlags();
 }

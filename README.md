@@ -8,7 +8,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  featureflip: ^2.4.1
+  featureflip: ^2.5.0
 ```
 
 Then run:

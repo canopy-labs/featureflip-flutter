@@ -1,3 +1,10 @@
+## 2.5.0 — 2026-08-20
+
+### Fixed
+
+- A closed handle serves the caller's default from every accessor and reports not-initialized. `close()` releases the shared core — stopping streaming and polling, shutting down the event processor — but the in-memory cache stayed readable, so a closed client kept evaluating against a frozen snapshot that could never update again while still reporting itself initialized. ([#2291](https://github.com/canopy-labs/featureflip/issues/2291))
+
+- A failed initial flag fetch is now diagnosable rather than swallowed by a bare `catch (_)`. ([#2290](https://github.com/canopy-labs/featureflip/issues/2290))
 ## 2.4.1 — 2026-08-05
 
 ### Fixed
