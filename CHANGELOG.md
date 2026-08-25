@@ -1,3 +1,16 @@
+## 2.6.0 — 2026-08-24
+
+### Fixed
+
+- A permanently rejected batch of analytics events is no longer retried forever. The flush restored the batch on *any* error, so a 401/403 (rejected SDK key) or 400 (malformed body) would be re-sent indefinitely, pinning the buffer at its cap and starving every later event. Only a retryable failure — 5xx, 429, or a transport fault — is kept now. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- A failing events endpoint no longer receives one request per recorded event. A restored batch leaves the buffer at or above the batch size, so every subsequent event re-fired the size trigger. That trigger now backs off for one flush interval after a retryable failure and will not start a second flush while one is running; the periodic timer remains the retry vehicle. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- A flush failure is now reported. The failure was swallowed by a bare `catch (_)`, so events could be retried or discarded with nothing written to the log. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+- `stop()` makes a single final attempt and discards the remainder, rather than restoring a batch into a buffer nothing will ever drain again. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+
+### Changed
+
+- A flush sends one request per batch instead of one for the whole buffer. Restoring failed batches is what lets the buffer reach its 1000-event cap, and a body that size invites a 413 — which is not retryable, so the path meant to preserve the backlog would have been the one that discarded it. ([#2456](https://github.com/canopy-labs/featureflip/issues/2456))
+
 ## 2.5.0 — 2026-08-20
 
 ### Fixed
