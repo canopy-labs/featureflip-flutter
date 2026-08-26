@@ -37,6 +37,16 @@ class EventProcessor {
   /// this latch a burst of events still starts a flush each.
   bool _autoFlushInFlight = false;
 
+  /// The drain currently running, if any.
+  ///
+  /// [_autoFlushInFlight] above only ever guarded the SIZE trigger. Nothing
+  /// stopped the periodic timer, an explicit `FeatureflipClient.flush()` and a
+  /// size-triggered flush from entering the loop together — two request streams
+  /// against the endpoint the backoff gate exists to protect, and a success in
+  /// one clearing the gate a failure in the other had just armed, which
+  /// re-opens the one-request-per-event behaviour outright (#2477).
+  Future<void>? _inFlightDrain;
+
   bool _closed = false;
 
   EventProcessor({
@@ -77,7 +87,30 @@ class EventProcessor {
   /// started being re-queued: a backlog can now reach [_maxBufferSize], and a
   /// body that size invites a 413 — which is not retryable, so the path meant
   /// to preserve the backlog would be the one that discarded it.
+  ///
+  /// At most one drain runs at a time. A caller arriving while one is already
+  /// going awaits it and returns — it does NOT start its own, and it does NOT
+  /// return early, because a caller that awaited `flush()` is asking for its
+  /// events to be sent. Matches the js/node SDKs, whose `flush()` has always
+  /// returned the in-flight promise.
   Future<void> flush() async {
+    final existing = _inFlightDrain;
+    if (existing != null) {
+      await existing;
+      return;
+    }
+
+    final drain = _drain();
+    _inFlightDrain = drain;
+    try {
+      await drain;
+    } finally {
+      _inFlightDrain = null;
+    }
+  }
+
+  /// The drain loop itself, callable when coalescing must be bypassed.
+  Future<void> _drain() async {
     while (_buffer.isNotEmpty) {
       final take = _buffer.length < _batchSize ? _buffer.length : _batchSize;
       final batch = _buffer.sublist(0, take);
@@ -144,7 +177,13 @@ class EventProcessor {
     // Set before the flush so a failure inside it discards rather than
     // re-queueing into a buffer nothing will ever drain.
     _closed = true;
-    await flush();
+    // _drain, not flush: shutdown must never be the call that gets coalesced
+    // away. If a periodic drain happens to be in flight, flush() would await it
+    // and return, and anything enqueued after that loop's last look at the
+    // buffer would be discarded unsent. Two drains overlapping is safe here
+    // precisely because [_closed] is already set, so neither can re-queue and
+    // there is no backoff left to disarm.
+    await _drain();
     _buffer = [];
   }
 }

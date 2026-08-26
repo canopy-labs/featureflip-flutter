@@ -85,4 +85,37 @@ void main() {
       expect(deltas.first.containsKey('flag-b'), isTrue);
     });
   });
+
+  group('reconnect jitter (#2508)', () {
+    // The drops this backoff absorbs are fleet-wide: one edge event severs every
+    // stream at once (#2457 — measured at a 2.5-3.0ms spread across both eval-api
+    // pods), so every client re-enters the backoff together. A constant delay there
+    // republishes the drop's own synchronisation as a reconnect spike one backoff
+    // later.
+    test('scatters a delay instead of returning it unchanged', () {
+      const base = StreamingDataSource.initialBackoff;
+      final samples = <Duration>{};
+      for (var i = 0; i < 200; i++) {
+        samples.add(StreamingDataSource.withJitter(base));
+      }
+
+      expect(
+        samples.length,
+        greaterThan(1),
+        reason: 'reconnect delay is deterministic — a fleet-wide drop reconnects in lockstep',
+      );
+      for (final d in samples) {
+        expect(d, greaterThanOrEqualTo(base ~/ 2));
+        expect(d, lessThanOrEqualTo(base));
+        expect(d, greaterThan(Duration.zero)); // anti-busy-loop
+      }
+    });
+
+    test('caps and floors degenerate inputs', () {
+      expect(StreamingDataSource.withJitter(Duration.zero), Duration.zero);
+      final capped = StreamingDataSource.withJitter(StreamingDataSource.maxBackoff);
+      expect(capped, greaterThanOrEqualTo(StreamingDataSource.maxBackoff ~/ 2));
+      expect(capped, lessThanOrEqualTo(StreamingDataSource.maxBackoff));
+    });
+  });
 }

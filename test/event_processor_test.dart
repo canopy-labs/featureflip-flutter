@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -233,6 +234,132 @@ void main() {
       // Nothing flushes after stop, so a still-failing endpoint must not hang
       // shutdown by looping until the buffer empties.
       await expectLater(processor.stop(), completes);
+    });
+  });
+
+  group('EventProcessor flush coalescing', () {
+    // A second flush must not open its own drain loop while one is already
+    // running. Two concurrent drains mean two request streams against the
+    // endpoint the backoff gate exists to protect, and — the sharper problem —
+    // a success in one clears the gate a failure in the other has just armed
+    // (#2477).
+    test('a concurrent flush awaits the in-flight drain instead of starting one',
+        () async {
+      var inFlight = 0;
+      var peak = 0;
+      final gate = Completer<void>();
+      final firstArrived = Completer<void>();
+
+      final mockClient = http_testing.MockClient((request) async {
+        inFlight++;
+        if (inFlight > peak) peak = inFlight;
+        if (!firstArrived.isCompleted) {
+          firstArrived.complete();
+          // Only the FIRST request is parked; re-parking a later one would wait
+          // on a gate nothing completes again.
+          await gate.future;
+        }
+        inFlight--;
+        return http.Response('', 202);
+      });
+
+      final httpClient = FeatureflipHttpClient(
+        baseUrl: 'https://test.example.com',
+        clientKey: 'key',
+        client: mockClient,
+      );
+
+      // Batch size 1 so the six events below need one round-trip each: plenty
+      // of room for a second loop to interleave if one is allowed to start.
+      final processor = EventProcessor(
+        httpClient: httpClient,
+        flushInterval: const Duration(hours: 1),
+        batchSize: 1,
+      );
+      for (var i = 0; i < 6; i++) {
+        processor.enqueue(SdkEvent(
+          type: 'purchase',
+          flagKey: 'flag-$i',
+          timestamp: '2024-01-01T00:00:00Z',
+        ));
+      }
+
+      final first = processor.flush();
+      await firstArrived.future;
+
+      var released = false;
+      var secondSawRelease = false;
+      final second = processor.flush().then((_) {
+        secondSawRelease = released;
+      });
+
+      // Room for the second caller to misbehave: uncoalesced it takes a batch
+      // off the front and posts it, which the peak counter catches.
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      released = true;
+      gate.complete();
+      await first;
+      await second;
+
+      expect(peak, 1,
+          reason: 'a second drain loop ran alongside the first');
+      // A caller that awaited flush() is asking for its events to be sent, so
+      // it waits for the drain rather than returning early.
+      expect(secondSawRelease, isTrue);
+    });
+
+    // stop() is the last drain there will ever be, so it must bypass
+    // coalescing: awaiting an in-flight drain and returning would discard the
+    // buffer unsent.
+    test('stop still drains while a flush is in flight', () async {
+      var requests = 0;
+      final gate = Completer<void>();
+      final firstArrived = Completer<void>();
+
+      final mockClient = http_testing.MockClient((request) async {
+        if (!firstArrived.isCompleted) {
+          firstArrived.complete();
+          await gate.future;
+        }
+        requests++;
+        return http.Response('', 202);
+      });
+
+      final httpClient = FeatureflipHttpClient(
+        baseUrl: 'https://test.example.com',
+        clientKey: 'key',
+        client: mockClient,
+      );
+
+      final processor = EventProcessor(
+        httpClient: httpClient,
+        flushInterval: const Duration(hours: 1),
+        batchSize: 1,
+      );
+      processor.enqueue(const SdkEvent(
+        type: 'purchase',
+        flagKey: 'flag-1',
+        timestamp: '2024-01-01T00:00:00Z',
+      ));
+      processor.enqueue(const SdkEvent(
+        type: 'purchase',
+        flagKey: 'flag-2',
+        timestamp: '2024-01-01T00:00:00Z',
+      ));
+
+      final first = processor.flush();
+      await firstArrived.future;
+
+      // Released as stop() runs, so stop() genuinely overlaps the in-flight
+      // drain rather than waiting it out first.
+      Future<void>.delayed(const Duration(milliseconds: 20), gate.complete);
+
+      await processor.stop();
+      await first;
+
+      expect(requests, 2,
+          reason: 'stop() lost events to coalescing');
     });
   });
 }

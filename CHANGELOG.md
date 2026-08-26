@@ -1,3 +1,13 @@
+
+
+## 2.6.1 — 2026-08-26
+
+### Fixed
+
+- An explicit `client.flush()` no longer opens a second drain loop while one is already running. The in-flight latch added for [#2456](https://github.com/canopy-labs/featureflip/issues/2456) guarded only the batch-size trigger, so the periodic flush, an explicit `client.flush()` and a size-triggered flush could enter the loop together — two request streams against an endpoint the backoff gate exists to protect, and worse, a success in one cleared the gate a failure in the other had just armed, re-opening the one-request-per-evaluation behaviour outright. A caller arriving while a drain is running now waits for it and returns, matching the js and node SDKs. Shutdown still bypasses coalescing, because it is the last drain there will ever be. ([#2477](https://github.com/canopy-labs/featureflip/issues/2477))
+
+- The first SSE reconnect after a healthy stream drops is now jittered to `[d/2, d]`, like every other backoff level. The drops this absorbs are fleet-wide — a single edge event severs every stream at once — so every client re-entered the backoff together and waited an identical delay, republishing the drop's own synchronisation as a reconnect spike one backoff later. Measured in production: a drop spread across 2.5–3.0 ms produced a reconnect spread of 26–46 ms. The delay never exceeds the previous one and stays strictly positive, so a stream that fails immediately still cannot busy-loop. ([#2508](https://github.com/canopy-labs/featureflip/issues/2508))
+
 ## 2.6.0 — 2026-08-24
 
 ### Fixed
@@ -18,6 +28,7 @@
 - A closed handle serves the caller's default from every accessor and reports not-initialized. `close()` releases the shared core — stopping streaming and polling, shutting down the event processor — but the in-memory cache stayed readable, so a closed client kept evaluating against a frozen snapshot that could never update again while still reporting itself initialized. ([#2291](https://github.com/canopy-labs/featureflip/issues/2291))
 
 - A failed initial flag fetch is now diagnosable rather than swallowed by a bare `catch (_)`. ([#2290](https://github.com/canopy-labs/featureflip/issues/2290))
+
 ## 2.4.1 — 2026-08-05
 
 ### Fixed
@@ -62,17 +73,17 @@
 ### Migration
 
 Before:
-```dart
+``dart
 final client = FeatureflipClient(config: config);
 // or
 FeatureflipClient.configure(config);
 final client = FeatureflipClient.shared;
-```
+``
 
 After:
-```dart
+``dart
 final client = FeatureflipClient.get('your-sdk-key', config: config);
-```
+``
 
 ## 1.0.0
 

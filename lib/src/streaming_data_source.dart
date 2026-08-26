@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
@@ -139,7 +140,9 @@ class StreamingDataSource {
       return;
     }
 
-    _retryTimer = Timer(_backoff, () {
+    // The ladder state (_backoff) stays un-jittered so the doubling is exact;
+    // only the scheduled wait is scattered.
+    _retryTimer = Timer(withJitter(_backoff), () {
       _backoff = _nextBackoff(_backoff);
       _connect();
     });
@@ -149,6 +152,23 @@ class StreamingDataSource {
     final next = current * 2;
     return next > maxBackoff ? maxBackoff : next;
   }
+
+  /// Returns a value in [d/2, d] to de-correlate reconnects across many SDK
+  /// instances (thundering-herd avoidance after a shared outage).
+  ///
+  /// Applied to EVERY reconnect, including the first. The drops this absorbs are
+  /// fleet-wide — one edge event severs every stream at once (#2457) — so every
+  /// client re-enters the backoff together. Scheduling the raw [_backoff] there
+  /// republished the drop's own synchronisation as a reconnect spike one backoff
+  /// later (#2508). The band stays strictly positive, so a stream that fails
+  /// immediately still cannot busy-loop.
+  static Duration withJitter(Duration d) {
+    if (d <= Duration.zero) return d;
+    final half = d.inMicroseconds ~/ 2;
+    return Duration(microseconds: half + _random.nextInt(half + 1));
+  }
+
+  static final _random = math.Random();
 
   void _handleEventLines(List<String> lines) {
     String? eventType;
