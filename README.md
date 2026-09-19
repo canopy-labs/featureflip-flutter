@@ -8,7 +8,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  featureflip: ^2.6.1
+  featureflip: ^2.6.2
 ```
 
 Then run:
@@ -99,6 +99,8 @@ client.track('checkout-completed', metadata: {'total': 99.99});
 // Force flush pending events
 await client.flush();
 ```
+
+Featureflip counts each event name, per environment. The metadata you pass is transmitted with the event but is not stored, and event counts are not surfaced in the app or API.
 
 ## Flutter Widget Integration
 

@@ -36,11 +36,15 @@ class FeatureflipHttpClient {
     );
   }
 
-  /// Posts analytics events to /v1/sdk/events.
+  /// Posts analytics events to /v1/client/events.
+  ///
+  /// The CLIENT surface, like every other call this SDK makes. /v1/sdk/events accepts server
+  /// keys only, so it answered this one with a 401 — which the event processor classifies as
+  /// permanent, discarding every batch (#3069).
   Future<void> postEvents(List<SdkEvent> events) async {
     final body = jsonEncode({'events': events.map((e) => e.toJson()).toList()});
     final response = await _client.post(
-      Uri.parse('$baseUrl/v1/sdk/events'),
+      Uri.parse('$baseUrl/v1/client/events'),
       headers: {
         'Content-Type': 'application/json',
         'Authorization': clientKey,

@@ -132,7 +132,7 @@ void main() {
       );
     });
 
-    test('postEvents sends events to /v1/sdk/events', () async {
+    test('postEvents sends events to /v1/client/events', () async {
       http.Request? capturedRequest;
       final mockClient = http_testing.MockClient((request) async {
         capturedRequest = request;
@@ -147,7 +147,7 @@ void main() {
 
       await client.postEvents([]);
 
-      expect(capturedRequest!.url.path, '/v1/sdk/events');
+      expect(capturedRequest!.url.path, '/v1/client/events');
       expect(capturedRequest!.headers['Authorization'], 'sdk-key-123');
     });
   });

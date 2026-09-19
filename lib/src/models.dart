@@ -66,7 +66,7 @@ class EvaluateResponse {
   }
 }
 
-/// An analytics event sent to /v1/sdk/events.
+/// An analytics event sent to /v1/client/events.
 class SdkEvent {
   final String type;
   final String? flagKey;

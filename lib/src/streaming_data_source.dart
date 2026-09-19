@@ -17,15 +17,41 @@ class StreamingDataSource {
   Map<String, dynamic> _context;
   final void Function(Map<String, FlagValue> flags) onChange;
   // Full snapshot the server sends first on every (re)connect -> apply as a REPLACE.
-  final void Function(Map<String, FlagValue> flags)? onSnapshot;
-  final void Function()? onMaxRetriesReached;
+  // Required, not nullable-falling-back-to-onChange: an omitted snapshot handler would
+  // silently merge the connect snapshot and resurrect flags deleted during the outage
+  // (#1873), and no dispatch test can see that -- they all pass it explicitly.
+  final void Function(Map<String, FlagValue> flags) onSnapshot;
+  // Invoked ONCE per outage, when the stream has failed [maxRetries] times, so the
+  // core can start polling ALONGSIDE this still-retrying stream. Never a terminal
+  // give-up: retries continue at the capped backoff (#3075).
+  final void Function()? onFallbackToPolling;
+  // Invoked when a stream that had fallen back delivers a frame again, so the core
+  // can retire the fallback poller.
+  final void Function()? onStreamRecovered;
   final http.Client _client;
 
   StreamSubscription<String>? _subscription;
   Timer? _retryTimer;
-  Duration _backoff = initialBackoff;
+  // The delay the first reconnect waits, and the value backoff resets to. Held as an
+  // instance field (rather than reading the static) so tests can drive the retry cap
+  // without waiting out the real 1s-and-doubling schedule — mirrors the android
+  // source's `initialBackoffMs` and swift's `initialBackoff`.
+  final Duration _baseBackoff;
+  Duration _backoff;
   int _retryCount = 0;
+  // True between arming the polling fallback and the next delivered frame. Gates both
+  // callbacks so each fires once per outage rather than once per retry.
+  //
+  // Deliberately NOT cleared by [start]: that is reachable from the core's foreground
+  // handler and [updateContext] while a fallback poller is live, and clearing it there
+  // would lose the only record that a poller is waiting to be retired — leaving it
+  // running beside a recovered stream forever, which is the defect this fixes.
+  bool _fallbackActive = false;
   bool _closed = false;
+  // Identity of the current connection attempt, bumped by [_connect] and again by
+  // [_scheduleRetry]. Callbacks carry the generation they were registered under, so a
+  // superseded or already-retired connection cannot act on this source.
+  int _connectionGeneration = 0;
   String? _connectionId;
 
   StreamingDataSource({
@@ -33,10 +59,14 @@ class StreamingDataSource {
     required this.clientKey,
     required Map<String, dynamic> context,
     required this.onChange,
-    this.onSnapshot,
-    this.onMaxRetriesReached,
+    required this.onSnapshot,
+    this.onFallbackToPolling,
+    this.onStreamRecovered,
+    Duration initialBackoff = StreamingDataSource.initialBackoff,
     http.Client? client,
   })  : _context = Map.of(context),
+        _baseBackoff = initialBackoff,
+        _backoff = initialBackoff,
         _client = client ?? http.Client();
 
   /// Builds the SSE stream URL with authorization and context query params.
@@ -60,7 +90,7 @@ class StreamingDataSource {
     stop();
     _closed = false;
     _retryCount = 0;
-    _backoff = initialBackoff;
+    _backoff = _baseBackoff;
     _connect();
   }
 
@@ -81,7 +111,14 @@ class StreamingDataSource {
     start();
   }
 
-  bool get isMaxRetriesReached => _retryCount >= maxRetries;
+  /// Whether the polling fallback is currently armed — i.e. the stream has exhausted
+  /// its retry budget and has not delivered a frame since. Visible for testing; the
+  /// stream keeps retrying regardless.
+  bool get hasFallenBackToPolling => _fallbackActive;
+
+  /// Consecutive failed connect attempts. Visible for testing, so a test can show the
+  /// source still reconnecting past [maxRetries].
+  int get retryAttempts => _retryCount;
 
   /// The connection ID received from the server via connection-ready event.
   String? get connectionId => _connectionId;
@@ -89,19 +126,29 @@ class StreamingDataSource {
   void _connect() {
     if (_closed) return;
 
+    // Every attempt gets an identity, and every callback carries it. That is what
+    // makes a connection able to spend exactly one retry, and what stops a response
+    // that arrives after its attempt was superseded from installing itself.
+    final generation = ++_connectionGeneration;
+
     final uri = buildStreamUri(baseUrl, clientKey, _context);
     final request = http.Request('GET', uri)
       ..headers['Accept'] = 'text/event-stream';
 
     _client.send(request).then((response) {
-      if (response.statusCode != 200) {
-        _scheduleRetry();
+      if (_closed || generation != _connectionGeneration) {
+        // stop(), updateContext() or a retry superseded this attempt while its
+        // request was still in flight. Installing its subscription here would leave
+        // TWO live SSE connections — the older one unreferenced, so nothing could
+        // ever stop it — both feeding the store, the older with staler evaluations.
+        // Cancel rather than ignore, or the socket is held open for nothing.
+        response.stream.listen(null).cancel();
         return;
       }
-
-      // Reset backoff on successful connection.
-      _backoff = initialBackoff;
-      _retryCount = 0;
+      if (response.statusCode != 200) {
+        _scheduleRetry(generation);
+        return;
+      }
 
       final lines = response.stream
           .transform(utf8.decoder)
@@ -119,25 +166,49 @@ class StreamingDataSource {
             buffer.add(line);
           }
         },
-        onError: (_) => _scheduleRetry(),
-        onDone: () => _scheduleRetry(),
+        onError: (_) => _scheduleRetry(generation),
+        onDone: () => _scheduleRetry(generation),
       );
     }).catchError((_) {
-      _scheduleRetry();
+      _scheduleRetry(generation);
     });
   }
 
-  void _scheduleRetry() {
+  /// Schedules the reconnect for the connection identified by [generation].
+  ///
+  /// At most ONE retry per connection. A stream that errors and then closes fires
+  /// both `onError` and `onDone` — `cancelOnError` defaults to false — and the send
+  /// future's `catchError` can fire alongside either. Without this, one failed
+  /// connection spent two of the five retries, so the effective budget was below the
+  /// documented cap in that failure shape; it mattered more once the counter stopped
+  /// resetting on every 200 (#3075). Worse, the second call also scheduled a second
+  /// [_connect] while the first was still in flight, and `_retryTimer?.cancel()`
+  /// cannot cancel a timer that has already fired — which is how two live SSE
+  /// connections became representable, only the newer one referenced.
+  ///
+  /// Bumping the generation is what enforces it: every later callback from this
+  /// connection sees a stale identity and returns.
+  void _scheduleRetry(int generation) {
     if (_closed) return;
+    if (generation != _connectionGeneration) return;
+    _connectionGeneration++;
 
-    // Cancel any existing timer to prevent overlapping retries
+    // This connection is finished with; releasing it here is also what stops its
+    // sibling callback ever running.
+    _subscription?.cancel();
+    _subscription = null;
     _retryTimer?.cancel();
     _retryTimer = null;
 
     _retryCount++;
-    if (_retryCount >= maxRetries) {
-      onMaxRetriesReached?.call();
-      return;
+    // The fallback is ADDITIVE, never terminal (#3075). Polling covers the outage
+    // while this source keeps retrying the stream underneath at the capped backoff,
+    // and the next delivered frame retires the poller. Returning here instead left
+    // the app polling — and blind to real-time updates, kill switches included —
+    // until it was restarted, after only ~31s of unreachability.
+    if (_retryCount >= maxRetries && !_fallbackActive) {
+      _fallbackActive = true;
+      onFallbackToPolling?.call();
     }
 
     // The ladder state (_backoff) stays un-jittered so the doubling is exact;
@@ -146,6 +217,33 @@ class StreamingDataSource {
       _backoff = _nextBackoff(_backoff);
       _connect();
     });
+  }
+
+  /// DELIVERED CONFIG — not merely an accepted socket — is what proves the stream
+  /// healthy, and it is the condition the rest of the fleet resets on (js and java on
+  /// `sync`, go on its first complete frame, which for the server stream *is* `sync`).
+  /// Resetting on the 200 instead let an accept-then-close server clear the counter
+  /// every cycle, so the retry budget was never exhausted, the polling fallback could
+  /// never arm, and the app saw nothing at all for the duration of such an outage
+  /// (#3074).
+  ///
+  /// Reached only from the `flags-updated` branch, never from `connection-ready`: the
+  /// client stream's FIRST frame is that ~40-byte handshake and it carries no config,
+  /// so a server that accepts, greets and dies would otherwise reset the budget
+  /// forever and re-open exactly the hole above. Deliberately still counted when the
+  /// payload fails to parse — the stream itself is demonstrably up, the store keeps
+  /// its last-known-good, and the parse failure is reported on its own path.
+  ///
+  /// Recovery is signalled from HERE rather than from the retry path: a healthy
+  /// stream's subscription stays open indefinitely, so waiting for it to close before
+  /// reaping would leave the poller alive that entire time, its periodic whole-store
+  /// replaces reverting the deltas this stream applies.
+  void _configDelivered() {
+    _retryCount = 0;
+    _backoff = _baseBackoff;
+    if (!_fallbackActive) return;
+    _fallbackActive = false;
+    onStreamRecovered?.call();
   }
 
   static Duration _nextBackoff(Duration current) {
@@ -203,12 +301,17 @@ class StreamingDataSource {
       // explicit marker, not event order, so a delta racing ahead of the snapshot can't
       // be mistaken for a full replace.
       if (json['full'] == true) {
-        (onSnapshot ?? onChange)(response.flags);
+        onSnapshot(response.flags);
       } else {
         onChange(response.flags);
       }
     } catch (_) {
       // Ignore parse errors
     }
+
+    // AFTER the store has been updated, never before: retiring the fallback poller is
+    // what this signals, and a poller retired one frame early can still land an older
+    // whole-store replace on top of the snapshot just applied.
+    _configDelivered();
   }
 }

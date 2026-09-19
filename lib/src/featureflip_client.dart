@@ -309,6 +309,12 @@ class _SharedFeatureflipCore {
   // Private
 
   void _startDataSource() {
+    // Idempotent, and that is load-bearing rather than defensive (#3075). An orphaned
+    // streaming source used to stop itself at the retry cap; it now retries forever
+    // AND keeps calling back into this core, so one left running by a second
+    // _startDataSource() could retire the live source's fallback poller mid-outage and
+    // leave the app uncovered by either.
+    if (_streamingDataSource != null) return;
     if (config.streaming) {
       _streamingDataSource = StreamingDataSource(
         baseUrl: config.baseUrl,
@@ -318,7 +324,9 @@ class _SharedFeatureflipCore {
         // First flags-updated after (re)connect is the full snapshot -> REPLACE,
         // so a flag deleted during an outage is dropped on reconnect.
         onSnapshot: _handleFullUpdate,
-        onMaxRetriesReached: _handleStreamingFallback,
+        // Stream exhausted its retries -> poll ALONGSIDE it until it recovers.
+        onFallbackToPolling: _handleStreamingFallback,
+        onStreamRecovered: _stopFallbackPolling,
       );
       _streamingDataSource!.start();
     } else {
@@ -326,13 +334,36 @@ class _SharedFeatureflipCore {
     }
   }
 
+  /// Streaming exhausted its retries: start polling to cover the outage.
+  ///
+  /// The streaming source is deliberately NOT stopped or nulled (#3075). Nulling it
+  /// is what used to make the fallback permanent — nothing would ever have restarted
+  /// streaming, so the app lost real-time updates until it was killed. It kept
+  /// `_handleForeground`/`identify` from resurrecting a *dormant* stream beside the
+  /// poller (#1902), but the stream is no longer dormant: it keeps retrying
+  /// underneath, so those two call sites act on the one live source that already
+  /// exists and cannot create a second. `_startDataSource` is the only construction
+  /// site and runs once.
   void _handleStreamingFallback() {
-    _streamingDataSource?.stop();
-    _streamingDataSource = null;
+    // A source detached by close() can still fire this: acting on it would start a
+    // poller nothing holds a reference to, polling for the rest of the process's life.
+    if (_streamingDataSource == null) return;
     _startPolling();
   }
 
+  /// Retires a polling fallback once the stream is carrying configuration again.
+  /// Clears the reference as well as stopping the poller, so a later outage falls
+  /// back again — [_startPolling] refuses to start a second poller while one is
+  /// referenced, and a dead one parked there would leave the next outage uncovered.
+  void _stopFallbackPolling() {
+    if (_streamingDataSource == null) return;
+    _pollingDataSource?.stop();
+    _pollingDataSource = null;
+  }
+
   void _startPolling() {
+    // Idempotent: a stream->polling fallback must start at most one poller.
+    if (_pollingDataSource != null) return;
     _pollingDataSource = PollingDataSource(
       httpClient: httpClient,
       context: _currentContext,
