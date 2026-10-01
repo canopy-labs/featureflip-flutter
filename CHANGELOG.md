@@ -1,5 +1,11 @@
 
 
+## 2.6.3 — 2026-10-01
+
+### Changed
+
+- The pub.dev listing now carries the topics `feature-flags`, `feature-toggles`, `feature-management` and `sdk`, so the package appears under those tags. No code changes.
+
 ## 2.6.2 — 2026-09-19
 
 ### Fixed
