@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import 'flag_cache.dart';
+import 'models.dart';
 
 /// A [ChangeNotifier] that exposes feature flag values for Flutter widgets.
 ///
@@ -12,26 +13,31 @@ import 'flag_cache.dart';
 /// caused the flag change.
 class FeatureflipProvider extends ChangeNotifier {
   final FlagCache _cache;
+  final void Function(String key, FlagValue? flag)? _onRead;
 
-  FeatureflipProvider(this._cache);
+  /// [onRead] is called once per variation call with the key read and the
+  /// cached flag (null when absent). The client uses it to report reads made
+  /// from widgets, which never pass through the client's own variation methods.
+  FeatureflipProvider(this._cache, {void Function(String key, FlagValue? flag)? onRead})
+      : _onRead = onRead;
 
   /// Returns a boolean flag value, or the default if missing or wrong type.
   bool boolVariation(String key, {required bool defaultValue}) {
-    final flag = _cache.get(key);
+    final flag = _read(key);
     if (flag == null || flag.value is! bool) return defaultValue;
     return flag.value as bool;
   }
 
   /// Returns a string flag value, or the default if missing or wrong type.
   String stringVariation(String key, {required String defaultValue}) {
-    final flag = _cache.get(key);
+    final flag = _read(key);
     if (flag == null || flag.value is! String) return defaultValue;
     return flag.value as String;
   }
 
   /// Returns a numeric flag value, or the default if missing or wrong type.
   double numberVariation(String key, {required double defaultValue}) {
-    final flag = _cache.get(key);
+    final flag = _read(key);
     if (flag == null) return defaultValue;
     final value = flag.value;
     if (value is double) return value;
@@ -42,7 +48,7 @@ class FeatureflipProvider extends ChangeNotifier {
 
   /// Returns the raw flag value, or the default if missing.
   dynamic jsonVariation(String key, {required dynamic defaultValue}) {
-    final flag = _cache.get(key);
+    final flag = _read(key);
     if (flag == null) return defaultValue;
     return flag.value;
   }
@@ -50,5 +56,11 @@ class FeatureflipProvider extends ChangeNotifier {
   /// Notifies listeners that flag values have changed.
   void updateFlags() {
     notifyListeners();
+  }
+
+  FlagValue? _read(String key) {
+    final flag = _cache.get(key);
+    _onRead?.call(key, flag);
+    return flag;
   }
 }

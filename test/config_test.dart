@@ -13,6 +13,7 @@ void main() {
       expect(config.flushIntervalSeconds, 30);
       expect(config.flushBatchSize, 100);
       expect(config.initTimeoutSeconds, 10);
+      expect(config.sendEvaluationEvents, isTrue);
     });
 
     test('accepts custom values', () {
@@ -25,6 +26,7 @@ void main() {
         flushIntervalSeconds: 15,
         flushBatchSize: 50,
         initTimeoutSeconds: 5,
+        sendEvaluationEvents: false,
       );
       expect(config.clientKey, 'my-key');
       expect(config.baseUrl, 'https://custom.example.com');
@@ -34,6 +36,7 @@ void main() {
       expect(config.flushIntervalSeconds, 15);
       expect(config.flushBatchSize, 50);
       expect(config.initTimeoutSeconds, 5);
+      expect(config.sendEvaluationEvents, isFalse);
     });
   });
 }

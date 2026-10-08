@@ -8,7 +8,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  featureflip: ^2.6.3
+  featureflip: ^2.7.0
 ```
 
 Then run:
@@ -48,6 +48,7 @@ final config = FeatureflipConfig(
   flushIntervalSeconds: 30,                       // Event flush interval in seconds
   flushBatchSize: 100,                            // Events per batch
   initTimeoutSeconds: 10,                         // Max seconds to wait for initialization
+  sendEvaluationEvents: true,                     // Report which flags the app reads (default)
 );
 ```
 
@@ -101,6 +102,16 @@ await client.flush();
 ```
 
 Featureflip counts each event name, per environment. The metadata you pass is transmitted with the event but is not stored, and event counts are not surfaced in the app or API.
+
+## Flag Read Reporting
+
+The SDK tells Featureflip which flags your app reads, and it does this by default. The first read of a flag in each hour queues one `Evaluation` event for each variation and `user_id`, and the same flag queues another after the app returns to the foreground. Events go out with your `track()` events on the next flush (every 30 seconds by default, and when the app goes to the background). Repeat reads inside the hour send nothing and cost almost nothing, so reading flags in `build()` is fine.
+
+Reads through `boolVariation`, `stringVariation`, `numberVariation` and `jsonVariation` count, on the client and on `flagProvider`. A read of a flag the SDK doesn't have counts too, and is reported with no variation. `allFlags()` doesn't count. A flag your app reaches only through `allFlags()` looks unused to Featureflip, so it can be marked stale and archived.
+
+Featureflip uses these reads to see which flags deployed code still uses, and it refuses to archive a flag that a client has read recently.
+
+Set `sendEvaluationEvents: false` to turn reporting off. The SDK then sends no `Evaluation` events and no `X-Featureflip-Reports-Evaluations` header, and Featureflip counts every flag it sends to the device as read, as it did before 2.7.0.
 
 ## Flutter Widget Integration
 

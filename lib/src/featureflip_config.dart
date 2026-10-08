@@ -30,6 +30,17 @@ class FeatureflipConfig {
   /// `get()` per client key, like every other option.
   final List<EvaluationInspector> inspectors;
 
+  /// Report the flags this app reads, so Featureflip can tell which flags
+  /// deployed code still uses. On by default.
+  ///
+  /// When on, the first read of each flag (per variation and `user_id`) in an
+  /// hour queues one `Evaluation` event, and `/v1/client/evaluate` and
+  /// `/v1/client/identify` requests declare it with
+  /// `X-Featureflip-Reports-Evaluations: 1`. When off, neither happens, and the
+  /// server counts every flag it sends to this device as read. Honored on the
+  /// first `get()` per client key, like every other option.
+  final bool sendEvaluationEvents;
+
   const FeatureflipConfig({
     required this.clientKey,
     this.baseUrl = 'https://eval.featureflip.io',
@@ -40,5 +51,6 @@ class FeatureflipConfig {
     this.flushBatchSize = 100,
     this.initTimeoutSeconds = 10,
     this.inspectors = const [],
+    this.sendEvaluationEvents = true,
   });
 }

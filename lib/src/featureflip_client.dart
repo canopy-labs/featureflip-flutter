@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import 'anonymous_key_store.dart';
 import 'featureflip_config.dart';
@@ -9,6 +10,7 @@ import 'event_processor.dart';
 import 'lifecycle_observer.dart';
 import 'models.dart';
 import 'polling_data_source.dart';
+import 'read_recorder.dart';
 import 'streaming_data_source.dart';
 
 /// Process-wide cache of shared cores, keyed by SDK key.
@@ -33,6 +35,16 @@ class _SharedFeatureflipCore {
   LifecycleObserver? _lifecycleObserver;
 
   Map<String, dynamic> _currentContext;
+
+  /// `user_id` of [_currentContext], as `track()` and read reporting send it.
+  /// Cached because every flag read needs it: recomputing it per read would put
+  /// a map lookup and a conversion on the hot path. [_setContext] is the only
+  /// writer of the context after construction, and it refreshes this.
+  String? _currentUserId;
+
+  /// Present exactly when [httpClient] declares X-Featureflip-Reports-Evaluations,
+  /// so the server is never told reads are reported while none are, or the reverse.
+  late final ReadRecorder? _readRecorder;
   final AnonymousKeyStore _anonymousKeyStore;
   bool _initialized = false;
   final bool _isTestClient;
@@ -48,6 +60,7 @@ class _SharedFeatureflipCore {
     required bool isTestClient,
     AnonymousKeyStore? anonymousKeyStore,
   })  : _currentContext = Map.of(currentContext),
+        _currentUserId = _userIdOf(currentContext),
         _anonymousKeyStore = anonymousKeyStore ?? SharedPreferencesAnonymousKeyStore(),
         _isTestClient = isTestClient {
     eventProcessor = EventProcessor(
@@ -55,7 +68,8 @@ class _SharedFeatureflipCore {
       flushInterval: Duration(seconds: config.flushIntervalSeconds),
       batchSize: config.flushBatchSize,
     );
-    provider = FeatureflipProvider(cache);
+    _readRecorder = httpClient.reportsEvaluations ? ReadRecorder(sink: eventProcessor.enqueue) : null;
+    provider = FeatureflipProvider(cache, onRead: _recordRead);
   }
 
   _SharedFeatureflipCore._test(
@@ -76,7 +90,9 @@ class _SharedFeatureflipCore {
       flushInterval: const Duration(seconds: 30),
       batchSize: 100,
     );
-    provider = FeatureflipProvider(cache);
+    // forTesting clients make no network calls, so they report nothing.
+    _readRecorder = null;
+    provider = FeatureflipProvider(cache, onRead: _recordRead);
     final snapshot = <String, FlagValue>{};
     for (final entry in overrides.entries) {
       snapshot[entry.key] = FlagValue(
@@ -127,7 +143,7 @@ class _SharedFeatureflipCore {
     // Guarded: a shared_preferences platform/channel error must degrade to the
     // raw context, not break initialization.
     try {
-      _currentContext = await resolveAnonymousContext(_currentContext, _anonymousKeyStore);
+      _setContext(await resolveAnonymousContext(_currentContext, _anonymousKeyStore));
     } catch (err) {
       // Persistence unavailable — proceed with the caller's context. Logged
       // rather than swallowed: it silently changes bucketing for anonymous
@@ -190,6 +206,7 @@ class _SharedFeatureflipCore {
     final flag = cache.get(key);
     final value = (flag == null || flag.value is! bool) ? defaultValue : flag.value as bool;
     _notifyInspectors(key, flag, value);
+    _recordRead(key, flag);
     return value;
   }
 
@@ -197,6 +214,7 @@ class _SharedFeatureflipCore {
     final flag = cache.get(key);
     final value = (flag == null || flag.value is! String) ? defaultValue : flag.value as String;
     _notifyInspectors(key, flag, value);
+    _recordRead(key, flag);
     return value;
   }
 
@@ -205,6 +223,7 @@ class _SharedFeatureflipCore {
     final raw = flag?.value;
     final value = raw is num ? raw.toDouble() : defaultValue;
     _notifyInspectors(key, flag, value);
+    _recordRead(key, flag);
     return value;
   }
 
@@ -212,7 +231,24 @@ class _SharedFeatureflipCore {
     final flag = cache.get(key);
     final value = flag == null ? defaultValue : flag.value;
     _notifyInspectors(key, flag, value);
+    _recordRead(key, flag);
     return value;
+  }
+
+  /// Reports a read of [key] (see [ReadRecorder]). On every read, so it stays
+  /// allocation-free: a null check, then the recorder's repeat path.
+  void _recordRead(String key, FlagValue? flag) {
+    _readRecorder?.record(key, flag?.variation, _currentUserId);
+  }
+
+  void _setContext(Map<String, dynamic> context) {
+    _currentContext = context;
+    _currentUserId = _userIdOf(context);
+  }
+
+  static String? _userIdOf(Map<String, dynamic> context) {
+    final userId = context['user_id'];
+    return userId is String ? userId : userId?.toString();
   }
 
   /// Fire the registered inspectors. Called once per variation call, after type
@@ -278,7 +314,7 @@ class _SharedFeatureflipCore {
     final connectionId = _streamingDataSource?.connectionId;
     final response = await httpClient.identify(resolved, connectionId: connectionId);
     cache.setAll(response.flags);
-    _currentContext = Map.of(resolved);
+    _setContext(Map.of(resolved));
     _streamingDataSource?.updateContext(resolved);
     _pollingDataSource?.updateContext(resolved);
     provider.updateFlags();
@@ -287,11 +323,10 @@ class _SharedFeatureflipCore {
   // Track
 
   void track(String eventName, {Map<String, dynamic>? metadata}) {
-    final userId = _currentContext['user_id'];
     final event = SdkEvent(
       type: 'Custom',
       flagKey: eventName,
-      userId: userId is String ? userId : userId?.toString(),
+      userId: _currentUserId,
       timestamp: DateTime.now().toUtc().toIso8601String(),
       metadata: metadata,
     );
@@ -414,6 +449,12 @@ class _SharedFeatureflipCore {
   }
 
   void _handleForeground() {
+    // The recorder's Stopwatch stood still while the device slept, so a read
+    // reported before a long sleep would stay deduped after waking, and the
+    // server's last report could fall outside the archive guard's 24 h.
+    // Re-report from scratch on every resume; it costs at most one event per
+    // flag the app reads again.
+    _readRecorder?.resetWindow();
     _streamingDataSource?.start();
     _pollingDataSource?.start();
   }
@@ -455,11 +496,35 @@ class FeatureflipClient {
   ///
   /// If [config] differs from the cached instance's config, a warning is
   /// logged and the cached config is preserved.
-  static FeatureflipClient get(String sdkKey, {required FeatureflipConfig config}) {
+  static FeatureflipClient get(String sdkKey, {required FeatureflipConfig config}) =>
+      _get(sdkKey, config);
+
+  /// [get], with the HTTP transport and the anonymous-id store supplied by a
+  /// test. The core is cached under [sdkKey] exactly as [get] caches it, so a
+  /// later [get] for the same key returns a handle on this core.
+  @visibleForTesting
+  static FeatureflipClient getWithHttpClientForTesting(
+    String sdkKey, {
+    required FeatureflipConfig config,
+    required http.Client httpClient,
+    AnonymousKeyStore? anonymousKeyStore,
+  }) =>
+      _get(sdkKey, config, transport: httpClient, anonymousKeyStore: anonymousKeyStore);
+
+  static FeatureflipClient _get(
+    String sdkKey,
+    FeatureflipConfig config, {
+    http.Client? transport,
+    AnonymousKeyStore? anonymousKeyStore,
+  }) {
     final existing = _liveCache[sdkKey];
     if (existing != null && existing._acquire()) {
+      // sendEvaluationEvents is warned about, unlike streaming or the intervals:
+      // a caller turning reporting off must not have it silently stay on (and
+      // keep declaring it to the server) because another handle got there first.
       if (existing.config.clientKey != config.clientKey ||
-          existing.config.baseUrl != config.baseUrl) {
+          existing.config.baseUrl != config.baseUrl ||
+          existing.config.sendEvaluationEvents != config.sendEvaluationEvents) {
         debugPrint(
           'FeatureflipClient.get() called with different config for SDK key '
           'already in use; the cached instance\'s config is preserved.',
@@ -476,6 +541,8 @@ class FeatureflipClient {
     final httpClient = FeatureflipHttpClient(
       baseUrl: config.baseUrl,
       clientKey: config.clientKey,
+      client: transport,
+      reportsEvaluations: config.sendEvaluationEvents,
     );
     final core = _SharedFeatureflipCore(
       config: config,
@@ -483,6 +550,7 @@ class FeatureflipClient {
       cache: FlagCache(),
       currentContext: config.context,
       isTestClient: false,
+      anonymousKeyStore: anonymousKeyStore,
     );
     _liveCache[sdkKey] = core;
     return FeatureflipClient._(core);
@@ -574,5 +642,8 @@ class FeatureflipClient {
 
   /// Returns all current flag values, or an empty map once closed — the
   /// bulk-read analogue of a variation falling back to its default.
+  ///
+  /// Not reported as a read: a flag your code reaches only through `allFlags()`
+  /// looks unused to Featureflip, so it can be marked stale and archived.
   Map<String, FlagValue> allFlags() => _disposed ? const {} : _core.allFlags();
 }

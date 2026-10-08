@@ -6,14 +6,26 @@ import 'models.dart';
 
 /// HTTP client for evaluation API requests.
 class FeatureflipHttpClient {
+  /// Sent on evaluate and identify when this client reports the flags the app
+  /// reads to `/v1/client/events`. The server then stops recording an evaluation
+  /// for every flag it serves on the client's behalf. Only the value `1` counts.
+  static const reportsEvaluationsHeader = 'X-Featureflip-Reports-Evaluations';
+
   final String baseUrl;
   final String clientKey;
+
+  /// Whether requests declare [reportsEvaluationsHeader]. The core keeps a read
+  /// recorder exactly when this is true, so the two can never disagree. Defaults
+  /// to false, the safe side: the server then records every served flag.
+  final bool reportsEvaluations;
+
   final http.Client _client;
 
   FeatureflipHttpClient({
     required this.baseUrl,
     required this.clientKey,
     http.Client? client,
+    this.reportsEvaluations = false,
   }) : _client = client ?? http.Client();
 
   /// Fetches evaluated flags from /v1/client/evaluate.
@@ -74,6 +86,11 @@ class FeatureflipHttpClient {
         'Content-Type': 'application/json',
         'Authorization': clientKey,
         if (extraHeaders != null) ...extraHeaders,
+        // Only evaluate and identify (and polling, which calls evaluate) come
+        // through _post, and they are exactly the calls the server would otherwise
+        // credit with every flag they serve. postEvents and the SSE stream build
+        // their own requests and never send it.
+        if (reportsEvaluations) reportsEvaluationsHeader: '1',
       },
       body: body,
     );

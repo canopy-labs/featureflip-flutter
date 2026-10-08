@@ -1,5 +1,19 @@
 
 
+## 2.7.0 — 2026-10-07
+
+### Added
+
+- The SDK now reports which flags your app reads. The first read of a flag in each hour, and again after the app returns to the foreground, queues one `Evaluation` event for each variation and `user_id`. Events go to `/v1/client/events` with your `track()` events, on the same 30-second flush and when the app goes to the background. Reads through `boolVariation`, `stringVariation`, `numberVariation`, `jsonVariation` and the same methods on `flagProvider` count, including a read of a flag the SDK doesn't have, which is reported with no variation. `allFlags()` doesn't count. A repeat read inside the hour sends nothing and costs almost nothing. (#3545)
+- Requests to `/v1/client/evaluate` and `/v1/client/identify` now carry `X-Featureflip-Reports-Evaluations: 1`. The header tells the server this client reports its own reads, so the server stops recording an evaluation for every flag it sends to the device. (#3545)
+- New option `FeatureflipConfig.sendEvaluationEvents`, default `true`. Set it to `false` to send no `Evaluation` events and no header. The server then records every flag it sends, as before. (#3545)
+
+### Changed
+
+- Evaluation analytics for client-side flags now count deduplicated reads. Before, each flag served to a device counted as one evaluation per app launch. Expect the numbers to drop as your users upgrade. (#3545)
+- Client-side flags that are sent to devices but never read can now show as stale, which can trigger stale-flag notice emails. Before, every flag sent to a device looked evaluated. Likewise, a client-side flag whose code you removed can now be archived once no client has read it recently, as your users upgrade. Before, the archive was refused indefinitely. (#3545)
+- A second `FeatureflipClient.get()` for the same SDK key with a different `sendEvaluationEvents` now logs the config-mismatch warning. The first client's setting still applies. (#3545)
+
 ## 2.6.3 — 2026-10-01
 
 ### Changed

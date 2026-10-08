@@ -150,5 +150,68 @@ void main() {
       expect(capturedRequest!.url.path, '/v1/client/events');
       expect(capturedRequest!.headers['Authorization'], 'sdk-key-123');
     });
+
+    group('X-Featureflip-Reports-Evaluations', () {
+      const header = 'X-Featureflip-Reports-Evaluations';
+
+      Future<http.Request> capture(
+        Future<void> Function(FeatureflipHttpClient client) call, {
+        required bool reportsEvaluations,
+      }) async {
+        http.Request? captured;
+        final client = FeatureflipHttpClient(
+          baseUrl: 'https://test.example.com',
+          clientKey: 'sdk-key-123',
+          reportsEvaluations: reportsEvaluations,
+          client: http_testing.MockClient((request) async {
+            captured = request;
+            return request.url.path == '/v1/client/events'
+                ? http.Response('', 202)
+                : http.Response(jsonEncode({'flags': <String, dynamic>{}}), 200);
+          }),
+        );
+        await call(client);
+        return captured!;
+      }
+
+      test('the name matches the server contract exactly', () {
+        expect(FeatureflipHttpClient.reportsEvaluationsHeader, header);
+      });
+
+      test('evaluate sends it when the client reports its reads', () async {
+        final request = await capture((c) => c.evaluate({'user_id': 'u1'}), reportsEvaluations: true);
+        expect(request.url.path, '/v1/client/evaluate');
+        expect(request.headers[header], '1');
+      });
+
+      test('identify sends it when the client reports its reads', () async {
+        final request = await capture((c) => c.identify({'user_id': 'u1'}), reportsEvaluations: true);
+        expect(request.url.path, '/v1/client/identify');
+        expect(request.headers[header], '1');
+      });
+
+      test('identify keeps X-Connection-Id alongside it', () async {
+        final request = await capture(
+          (c) => c.identify({'user_id': 'u1'}, connectionId: 'conn-abc-123'),
+          reportsEvaluations: true,
+        );
+        expect(request.headers['X-Connection-Id'], 'conn-abc-123');
+        expect(request.headers[header], '1');
+        expect(request.headers['Authorization'], 'sdk-key-123');
+      });
+
+      test('evaluate and identify omit it when the client does not report its reads', () async {
+        final evaluate = await capture((c) => c.evaluate({}), reportsEvaluations: false);
+        final identify = await capture((c) => c.identify({}), reportsEvaluations: false);
+        expect(evaluate.headers.containsKey(header), isFalse);
+        expect(identify.headers.containsKey(header), isFalse);
+      });
+
+      test('postEvents never sends it', () async {
+        final request = await capture((c) => c.postEvents([]), reportsEvaluations: true);
+        expect(request.url.path, '/v1/client/events');
+        expect(request.headers.containsKey(header), isFalse);
+      });
+    });
   });
 }
