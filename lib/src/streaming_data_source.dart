@@ -4,6 +4,8 @@ import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
+import 'sdk_identity.dart';
+
 import 'models.dart';
 
 /// Connects to the evaluation API SSE stream for real-time flag updates.
@@ -54,6 +56,10 @@ class StreamingDataSource {
   int _connectionGeneration = 0;
   String? _connectionId;
 
+  /// Sent on every connect (#4143). The stream has its own http.Client, so it
+  /// shares nothing with FeatureflipHttpClient; the core passes the same value.
+  final String _identity;
+
   StreamingDataSource({
     required this.baseUrl,
     required this.clientKey,
@@ -64,7 +70,9 @@ class StreamingDataSource {
     this.onStreamRecovered,
     Duration initialBackoff = StreamingDataSource.initialBackoff,
     http.Client? client,
-  })  : _context = Map.of(context),
+    String? identity,
+  })  : _identity = identity ?? buildIdentity(),
+        _context = Map.of(context),
         _baseBackoff = initialBackoff,
         _backoff = initialBackoff,
         _client = client ?? http.Client();
@@ -133,7 +141,8 @@ class StreamingDataSource {
 
     final uri = buildStreamUri(baseUrl, clientKey, _context);
     final request = http.Request('GET', uri)
-      ..headers['Accept'] = 'text/event-stream';
+      ..headers['Accept'] = 'text/event-stream'
+      ..headers.addAll(identityHeaders(_identity));
 
     _client.send(request).then((response) {
       if (_closed || generation != _connectionGeneration) {

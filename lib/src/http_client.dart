@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'models.dart';
+import 'sdk_identity.dart';
 
 /// HTTP client for evaluation API requests.
 class FeatureflipHttpClient {
@@ -19,6 +20,11 @@ class FeatureflipHttpClient {
   /// to false, the safe side: the server then records every served flag.
   final bool reportsEvaluations;
 
+  /// `featureflip-flutter/<version>` plus any wrapper token, sent on every request
+  /// (#4143). The core builds it once from the config and hands the same value to
+  /// the stream.
+  final String identity;
+
   final http.Client _client;
 
   FeatureflipHttpClient({
@@ -26,7 +32,9 @@ class FeatureflipHttpClient {
     required this.clientKey,
     http.Client? client,
     this.reportsEvaluations = false,
-  }) : _client = client ?? http.Client();
+    String? identity,
+  })  : identity = identity ?? buildIdentity(),
+        _client = client ?? http.Client();
 
   /// Fetches evaluated flags from /v1/client/evaluate.
   Future<EvaluateResponse> evaluate(
@@ -60,6 +68,7 @@ class FeatureflipHttpClient {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': clientKey,
+        ...identityHeaders(identity),
       },
       body: body,
     );
@@ -85,6 +94,7 @@ class FeatureflipHttpClient {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': clientKey,
+        ...identityHeaders(identity),
         if (extraHeaders != null) ...extraHeaders,
         // Only evaluate and identify (and polling, which calls evaluate) come
         // through _post, and they are exactly the calls the server would otherwise

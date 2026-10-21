@@ -1,5 +1,12 @@
 
 
+## 2.8.0 — 2026-10-20
+
+### Added
+
+- Every request now names the SDK and its version: `featureflip-flutter/<version>`, on evaluate, identify, event posts and the SSE stream alike. Native builds previously sent the generic `Dart/<x> (dart:io)`, which every Dart HTTP client sends, and web builds sent nothing identifying at all. Native builds carry it in both `User-Agent` and `X-Featureflip-SDK`; web builds send only `X-Featureflip-SDK`, because a browser refuses a script-set `User-Agent` and logs an error for each attempt. (#4143)
+- `FeatureflipConfig.wrapperName` and `wrapperVersion`, for libraries that wrap this SDK. The wrapper's token follows the SDK's, e.g. `featureflip-flutter/<version> my-wrapper/1.0.0`. An invalid token is ignored with a diagnostic rather than failing construction. (#4143)
+
 ## 2.7.0 — 2026-10-07
 
 ### Added

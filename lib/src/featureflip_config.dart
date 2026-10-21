@@ -41,6 +41,18 @@ class FeatureflipConfig {
   /// first `get()` per client key, like every other option.
   final bool sendEvaluationEvents;
 
+  /// Name of a library that wraps this SDK (a design-system shell, an internal
+  /// platform client). Sent after the SDK's own token in the User-Agent and
+  /// X-Featureflip-SDK headers (`featureflip-flutter/<version> my-wrapper/1.0.0`)
+  /// so usage through the wrapper can be counted. Must be a valid HTTP product
+  /// token; an invalid one is ignored with a diagnostic. Leave unset when calling
+  /// the SDK directly. Not part of the different-config check: it identifies the
+  /// caller rather than changing behavior.
+  final String? wrapperName;
+
+  /// Version of the wrapper named by [wrapperName]. Optional.
+  final String? wrapperVersion;
+
   const FeatureflipConfig({
     required this.clientKey,
     this.baseUrl = 'https://eval.featureflip.io',
@@ -52,5 +64,7 @@ class FeatureflipConfig {
     this.initTimeoutSeconds = 10,
     this.inspectors = const [],
     this.sendEvaluationEvents = true,
+    this.wrapperName,
+    this.wrapperVersion,
   });
 }

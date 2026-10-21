@@ -11,6 +11,7 @@ import 'lifecycle_observer.dart';
 import 'models.dart';
 import 'polling_data_source.dart';
 import 'read_recorder.dart';
+import 'sdk_identity.dart';
 import 'streaming_data_source.dart';
 
 /// Process-wide cache of shared cores, keyed by SDK key.
@@ -362,6 +363,7 @@ class _SharedFeatureflipCore {
         // Stream exhausted its retries -> poll ALONGSIDE it until it recovers.
         onFallbackToPolling: _handleStreamingFallback,
         onStreamRecovered: _stopFallbackPolling,
+        identity: httpClient.identity,
       );
       _streamingDataSource!.start();
     } else {
@@ -543,6 +545,7 @@ class FeatureflipClient {
       clientKey: config.clientKey,
       client: transport,
       reportsEvaluations: config.sendEvaluationEvents,
+      identity: buildIdentity(wrapperName: config.wrapperName, wrapperVersion: config.wrapperVersion),
     );
     final core = _SharedFeatureflipCore(
       config: config,
