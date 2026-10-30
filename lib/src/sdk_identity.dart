@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 /// publish-flutter-sdk.yml rewrites it from the release tag alongside pubspec.yaml,
 /// and test/sdk_identity_test.dart holds the two equal between releases, so it
 /// cannot drift the way literals in four other SDKs did (#2141).
-const sdkVersion = '2.8.0';
+const sdkVersion = '2.8.1';
 
 // RFC 9110 product token: tchars.
 final _token = RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$");

@@ -248,7 +248,9 @@ class _SharedFeatureflipCore {
   }
 
   static String? _userIdOf(Map<String, dynamic> context) {
-    final userId = context['user_id'];
+    // `user_id` if present and non-null, else the `userId` alias. An empty string
+    // is a value, so this is a null check, not a truthiness one.
+    final userId = context['user_id'] ?? context['userId'];
     return userId is String ? userId : userId?.toString();
   }
 

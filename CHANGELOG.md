@@ -1,4 +1,9 @@
 
+## 2.8.1 — 2026-10-30
+
+### Fixed
+
+- `track()` and read reporting now attribute events to the context's `userId` when it has no `user_id`. A context of `{'userId': 'u1'}` used to send events with no user. `user_id` still wins when both are set, and an empty string counts as a value. (#4518)
 
 ## 2.8.0 — 2026-10-20
 

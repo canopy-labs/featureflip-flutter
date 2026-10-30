@@ -314,6 +314,41 @@ void main() {
       expect(custom['type'], 'Custom');
       expect(custom['userId'], 'u1');
     });
+
+    Future<Map<String, dynamic>> trackedEvent(Map<String, dynamic> context) async {
+      final api = _FakeEvaluationApi(_flags());
+      final client = _client(api, context: context);
+      await client.initialize();
+
+      client.track('checkout');
+      await client.flush();
+
+      final events = (jsonDecode(api.to('/v1/client/events').single.body) as Map<String, dynamic>)['events']
+          as List<dynamic>;
+      return events.cast<Map<String, dynamic>>().single;
+    }
+
+    test('track_reports_userId_when_only_userId_is_set', () async {
+      final custom = await trackedEvent({'userId': 'u1'});
+      expect(custom['type'], 'Custom');
+      expect(custom['userId'], 'u1');
+    });
+
+    test('track_prefers_user_id_over_userId', () async {
+      final custom = await trackedEvent({'user_id': 'a', 'userId': 'b'});
+      expect(custom['type'], 'Custom');
+      expect(custom['userId'], 'a');
+    });
+
+    test('a null user_id falls back to userId', () async {
+      final custom = await trackedEvent({'user_id': null, 'userId': 'u1'});
+      expect(custom['userId'], 'u1');
+    });
+
+    test('an empty user_id is a value and beats userId', () async {
+      final custom = await trackedEvent({'user_id': '', 'userId': 'b'});
+      expect(custom['userId'], '');
+    });
   });
 
   group('Flutter lifecycle', () {
