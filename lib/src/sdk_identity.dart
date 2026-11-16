@@ -1,12 +1,14 @@
 import 'package:flutter/foundation.dart';
 
+import 'sdk_logger.dart';
+
 /// The SDK's version, reported in every request (#4143, contract in #4138).
 ///
 /// Dart cannot read pubspec.yaml at runtime, so this is a constant.
 /// publish-flutter-sdk.yml rewrites it from the release tag alongside pubspec.yaml,
 /// and test/sdk_identity_test.dart holds the two equal between releases, so it
 /// cannot drift the way literals in four other SDKs did (#2141).
-const sdkVersion = '2.8.1';
+const sdkVersion = '2.8.2';
 
 // RFC 9110 product token: tchars.
 final _token = RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$");
@@ -14,12 +16,12 @@ final _token = RegExp(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$");
 /// `featureflip-flutter/<version>`, then the wrapper's token when one is set. A
 /// wrapper that is not a valid product token is dropped with a diagnostic rather
 /// than thrown: identity metadata must never stop the client starting.
-String buildIdentity({String? wrapperName, String? wrapperVersion}) {
+String buildIdentity({String? wrapperName, String? wrapperVersion, SdkLogger logger = const SdkLogger.none()}) {
   const sdk = 'featureflip-flutter/$sdkVersion';
   if (wrapperName == null || wrapperName.isEmpty) return sdk;
   final valid = _token.hasMatch(wrapperName) && (wrapperVersion == null || _token.hasMatch(wrapperVersion));
   if (!valid) {
-    debugPrint('[featureflip] ignoring wrapper "$wrapperName/$wrapperVersion": '
+    logger.log('[featureflip] ignoring wrapper "$wrapperName/$wrapperVersion": '
         'not a valid User-Agent product token');
     return sdk;
   }

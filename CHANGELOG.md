@@ -1,3 +1,9 @@
+## 2.8.2 — 2026-11-16
+
+### Security
+
+- The SDK key is now redacted from every log line the SDK emits, including error messages from the HTTP stack. `identify()` also no longer rethrows an `http.ClientException` whose message or uri quotes the key: it throws an `http.ClientException` with the key removed. The evaluation inspector error line now goes through `debugPrint` instead of `print`. (#5167, #5166)
+
 
 ## 2.8.1 — 2026-10-30
 

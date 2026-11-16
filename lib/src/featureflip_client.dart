@@ -12,6 +12,7 @@ import 'models.dart';
 import 'polling_data_source.dart';
 import 'read_recorder.dart';
 import 'sdk_identity.dart';
+import 'sdk_logger.dart';
 import 'streaming_data_source.dart';
 
 /// Process-wide cache of shared cores, keyed by SDK key.
@@ -28,6 +29,7 @@ class _SharedFeatureflipCore {
   final FeatureflipConfig config;
   final FeatureflipHttpClient httpClient;
   final FlagCache cache;
+  final SdkLogger _logger;
   late final EventProcessor eventProcessor;
   late final FeatureflipProvider provider;
 
@@ -60,7 +62,9 @@ class _SharedFeatureflipCore {
     required Map<String, dynamic> currentContext,
     required bool isTestClient,
     AnonymousKeyStore? anonymousKeyStore,
-  })  : _currentContext = Map.of(currentContext),
+    SdkLogger? logger,
+  })  : _logger = logger ?? SdkLogger(config.clientKey),
+        _currentContext = Map.of(currentContext),
         _currentUserId = _userIdOf(currentContext),
         _anonymousKeyStore = anonymousKeyStore ?? SharedPreferencesAnonymousKeyStore(),
         _isTestClient = isTestClient {
@@ -68,6 +72,7 @@ class _SharedFeatureflipCore {
       httpClient: httpClient,
       flushInterval: Duration(seconds: config.flushIntervalSeconds),
       batchSize: config.flushBatchSize,
+      logger: _logger,
     );
     _readRecorder = httpClient.reportsEvaluations ? ReadRecorder(sink: eventProcessor.enqueue) : null;
     provider = FeatureflipProvider(cache, onRead: _recordRead);
@@ -81,6 +86,7 @@ class _SharedFeatureflipCore {
           baseUrl: 'https://localhost',
           inspectors: inspectors,
         ),
+        _logger = const SdkLogger('test-key'),
         httpClient = FeatureflipHttpClient(baseUrl: 'https://localhost', clientKey: 'test-key'),
         cache = FlagCache(),
         _currentContext = {},
@@ -90,6 +96,7 @@ class _SharedFeatureflipCore {
       httpClient: httpClient,
       flushInterval: const Duration(seconds: 30),
       batchSize: 100,
+      logger: _logger,
     );
     // forTesting clients make no network calls, so they report nothing.
     _readRecorder = null;
@@ -149,7 +156,7 @@ class _SharedFeatureflipCore {
       // Persistence unavailable — proceed with the caller's context. Logged
       // rather than swallowed: it silently changes bucketing for anonymous
       // users, so it must not be invisible.
-      debugPrint('[featureflip] anonymous id unavailable, using the raw context: $err');
+      _logger.log('[featureflip] anonymous id unavailable, using the raw context: $err');
     }
     try {
       final response = await httpClient.evaluate(
@@ -169,7 +176,7 @@ class _SharedFeatureflipCore {
       // revoked key, captive-portal wifi and a backend blip otherwise all present
       // exactly like a healthy start, and every flag quietly serves its default
       // forever. The log is the only thing that distinguishes them (#2290).
-      debugPrint('[featureflip] initial flag fetch failed, serving defaults until the '
+      _logger.log('[featureflip] initial flag fetch failed, serving defaults until the '
           'data source recovers: $err');
     }
 
@@ -288,8 +295,7 @@ class _SharedFeatureflipCore {
       try {
         inspector(event);
       } catch (err) {
-        // ignore: avoid_print
-        print('[featureflip] evaluation inspector threw: $err');
+        _logger.log('[featureflip] evaluation inspector threw: $err');
       }
     }
   }
@@ -315,7 +321,14 @@ class _SharedFeatureflipCore {
       // persistence unavailable — use the caller's context
     }
     final connectionId = _streamingDataSource?.connectionId;
-    final response = await httpClient.identify(resolved, connectionId: connectionId);
+    final EvaluateResponse response;
+    try {
+      response = await httpClient.identify(resolved, connectionId: connectionId);
+    } catch (err, stack) {
+      // A transport error can quote the Authorization header; the caller logs
+      // what it catches, so the key must not leave the SDK inside it (#5167).
+      Error.throwWithStackTrace(_logger.redactError(err), stack);
+    }
     cache.setAll(response.flags);
     _setContext(Map.of(resolved));
     _streamingDataSource?.updateContext(resolved);
@@ -529,7 +542,7 @@ class FeatureflipClient {
       if (existing.config.clientKey != config.clientKey ||
           existing.config.baseUrl != config.baseUrl ||
           existing.config.sendEvaluationEvents != config.sendEvaluationEvents) {
-        debugPrint(
+        existing._logger.log(
           'FeatureflipClient.get() called with different config for SDK key '
           'already in use; the cached instance\'s config is preserved.',
         );
@@ -542,12 +555,17 @@ class FeatureflipClient {
       _liveCache.remove(sdkKey);
     }
 
+    final logger = SdkLogger(config.clientKey);
     final httpClient = FeatureflipHttpClient(
       baseUrl: config.baseUrl,
       clientKey: config.clientKey,
       client: transport,
       reportsEvaluations: config.sendEvaluationEvents,
-      identity: buildIdentity(wrapperName: config.wrapperName, wrapperVersion: config.wrapperVersion),
+      identity: buildIdentity(
+        wrapperName: config.wrapperName,
+        wrapperVersion: config.wrapperVersion,
+        logger: logger,
+      ),
     );
     final core = _SharedFeatureflipCore(
       config: config,
@@ -556,6 +574,7 @@ class FeatureflipClient {
       currentContext: config.context,
       isTestClient: false,
       anonymousKeyStore: anonymousKeyStore,
+      logger: logger,
     );
     _liveCache[sdkKey] = core;
     return FeatureflipClient._(core);

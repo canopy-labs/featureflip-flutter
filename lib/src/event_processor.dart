@@ -1,15 +1,16 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 
 import 'http_client.dart';
 import 'models.dart';
+import 'sdk_logger.dart';
 
 /// Batches analytics events and flushes them to the evaluation API.
 class EventProcessor {
   final FeatureflipHttpClient _httpClient;
   final int _batchSize;
   final Duration _flushInterval;
+  final SdkLogger _logger;
 
   /// Upper bound on buffered events.
   ///
@@ -53,7 +54,9 @@ class EventProcessor {
     required FeatureflipHttpClient httpClient,
     required Duration flushInterval,
     required int batchSize,
+    SdkLogger logger = const SdkLogger.none(),
   })  : _httpClient = httpClient,
+        _logger = logger,
         _flushInterval = flushInterval,
         // Clamped: [flush] loops on this, so a non-positive value would take
         // nothing per pass and spin on a non-empty buffer.
@@ -128,7 +131,7 @@ class EventProcessor {
         // malformed; both fail identically next time. Dropping shrinks the
         // buffer, so the loop still ends, and moving on means one poison batch
         // cannot block the backlog queued behind it.
-        debugPrint('[featureflip] dropped ${batch.length} analytics event(s) '
+        _logger.log('[featureflip] dropped ${batch.length} analytics event(s) '
             'the events endpoint rejected permanently: $err');
         if (_closed) return;
       } catch (err) {
@@ -150,14 +153,14 @@ class EventProcessor {
   void _requeue(List<SdkEvent> batch, Object err) {
     if (_closed) {
       // Nothing will flush again, so buffering here would only lose them later.
-      debugPrint('[featureflip] dropped ${batch.length} analytics event(s): '
+      _logger.log('[featureflip] dropped ${batch.length} analytics event(s): '
           'shutting down and will not flush again: $err');
       return;
     }
     _nextAutoFlushAt = DateTime.now().add(_flushInterval);
     _buffer.insertAll(0, batch);
     _trimToBound();
-    debugPrint('[featureflip] failed to flush ${batch.length} analytics '
+    _logger.log('[featureflip] failed to flush ${batch.length} analytics '
         'event(s); re-queued for the next flush: $err');
   }
 
@@ -166,7 +169,7 @@ class EventProcessor {
     final overflow = _buffer.length - _maxBufferSize;
     if (overflow <= 0) return;
     _buffer = _buffer.sublist(overflow);
-    debugPrint('[featureflip] event buffer is full; dropped $overflow of the '
+    _logger.log('[featureflip] event buffer is full; dropped $overflow of the '
         'oldest analytics event(s)');
   }
 
